@@ -1,0 +1,26 @@
+node_modules
+.env
+.env.local
+.neon
+drizzle/
+generated/
+
+# npm lockfile is intentionally not tracked: this machine's npmrc
+# routes through an internal proxy, so the lockfile's "resolved" URLs
+# are unreachable from Vercel. Vercel uses --no-package-lock and
+# resolves fresh against public npm (see vercel.json).
+package-lock.json
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Cursor / agent local caches
+.agents/
+.claude/
+skills-lock.json
+
+# OS
+.DS_Store
