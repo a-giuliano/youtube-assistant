@@ -1,4 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm install --no-package-lock --registry=https://registry.npmjs.org/ --no-audit --no-fund --loglevel=verbose"
+  "installCommand": "npm install --no-package-lock --legacy-peer-deps --registry=https://registry.npmjs.org/ --no-audit --no-fund --loglevel=verbose"
 }
