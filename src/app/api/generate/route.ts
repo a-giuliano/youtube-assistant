@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { auth } from '@/lib/auth/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,12 +9,22 @@ const FUNCTION_URL =
   process.env.NEON_FUNCTION_URL ?? 'http://localhost:8787';
 
 export async function POST(request: Request) {
-  let body: unknown;
+  const { data: session } = await auth.getSession();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  let body: Record<string, unknown>;
   try {
-    body = await request.json();
+    body = (await request.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
+
+  // Pin the request to the signed-in user. The Function trusts this proxy as
+  // its only caller; if you switch to direct browser → Function calls, verify
+  // a Neon Auth JWT in the Function instead of trusting a body field.
+  body.userId = session.user.id;
 
   try {
     const upstream = await fetch(FUNCTION_URL, {

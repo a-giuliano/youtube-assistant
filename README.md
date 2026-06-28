@@ -10,12 +10,13 @@ A demo Next.js app that turns a video transcript with timestamps into a publish-
 
 It is intentionally small, and it leans hard on Neon's backend primitives:
 
+- **Neon Auth** &mdash; users sign up / sign in with `@neondatabase/auth` (Better Auth under the hood); users live in the `neon_auth` schema in the same Postgres database, so they branch with the data.
 - **Neon AI Gateway** &mdash; `gpt-5-mini` via `@neondatabase/ai-sdk-provider`, plus the gateway's built-in `image_generation` tool for thumbnails.
 - **Neon Object Storage** &mdash; the generated JPEG is uploaded to a Neon-managed S3-compatible bucket (`thumbnails`).
-- **Neon Postgres** &mdash; every generation is persisted to a `videos` table via Drizzle ORM.
+- **Neon Postgres** &mdash; every generation is persisted to a `videos` table via Drizzle ORM, scoped to the signed-in user's id.
 - **Neon Functions** &mdash; the long-running generation work runs on a Neon Function (`generate`) that sits next to all of the above, so the only thing flying across the network is the final JSON.
 
-Everything &mdash; the database URL, the AI Gateway endpoint, the object-storage credentials &mdash; is declared in `neon.ts` and injected by `neon dev` / `neon deploy`.
+Everything &mdash; the database URL, the AI Gateway endpoint, the object-storage credentials, the Neon Auth URL &mdash; is declared in `neon.ts` and injected by `neon dev` / `neon deploy`.
 
 ## How it fits together
 
@@ -45,21 +46,28 @@ The Next.js Route Handler `/api/generate` is a thin proxy in front of the Functi
 
 ```
 youtube-publisher/
-├── neon.ts                          # AI Gateway + thumbnails bucket + `generate` function
-├── drizzle.config.ts                # Drizzle Kit config
+├── neon.ts                          # Neon Auth + AI Gateway + thumbnails bucket + `generate` function
+├── drizzle.config.ts                # Drizzle Kit config (schemaFilter: ['public'])
 ├── next.config.ts                   # Next.js config (pg/aws-sdk as server externals)
 ├── postcss.config.mjs               # Tailwind v4
 ├── functions/
 │   └── generate.ts                  # The Neon Function: transcript → title/desc/thumbnail
 └── src/
+    ├── middleware.ts                # Protects /, /history, /account/* → redirects to /auth/sign-in
     ├── app/
-    │   ├── layout.tsx               # Root layout, nav, fonts
+    │   ├── layout.tsx               # Root layout wraps everything in NeonAuthUIProvider + UserButton
     │   ├── page.tsx                 # Home: transcript form + result panel
-    │   ├── history/page.tsx         # Server Component listing past generations
-    │   ├── api/generate/route.ts    # Proxy → Neon Function
+    │   ├── auth/[path]/page.tsx     # Sign-in / sign-up UI via <AuthView />
+    │   ├── account/[path]/page.tsx  # Account management via <AccountView />
+    │   ├── history/page.tsx         # Server Component listing the signed-in user's generations
+    │   ├── api/auth/[...path]/route.ts # Neon Auth (Better Auth) handler
+    │   ├── api/generate/route.ts    # Auth-checked proxy → Neon Function (injects userId)
     │   └── _components/             # TranscriptForm, GenerationResult
-    ├── db/schema.ts                 # Drizzle schema (videos table)
+    ├── db/schema.ts                 # Drizzle schema (videos table with user_id uuid)
     └── lib/
+        ├── auth/
+        │   ├── server.ts            # createNeonAuth() — server-side auth instance
+        │   └── client.ts            # createAuthClient() — browser-side auth client
         ├── db.ts                    # pg Pool + Drizzle for the Next.js side
         └── storage.ts               # S3 client + signed-URL helper
 ```
@@ -80,11 +88,18 @@ npm install
 # Link this repo to a Neon project (creates `.neon`).
 neon link
 
-# Provision AI Gateway + the `thumbnails` bucket + the `generate` function,
-# and write all the credentials to `.env.local`.
+# Provision Neon Auth + AI Gateway + the `thumbnails` bucket + the `generate` function,
+# and write all the credentials (including NEON_AUTH_BASE_URL) to `.env.local`.
 neon deploy
 
-# Apply the Drizzle schema (creates the `videos` table).
+# Generate a per-app cookie secret for Neon Auth and append it to `.env.local`.
+# This value is NOT managed by Neon — it just signs the session cookie locally.
+echo "NEON_AUTH_COOKIE_SECRET=$(openssl rand -base64 32)" >> .env.local
+
+# Allow http://localhost as a trusted Neon Auth domain for local sign-in.
+neon neon-auth domain allow-localhost
+
+# Apply the Drizzle schema (creates the `videos` table with `user_id`).
 npm run db:push
 ```
 
@@ -100,7 +115,7 @@ neon dev
 npm run dev
 ```
 
-Open <http://localhost:3000>. Paste a transcript (or click **Use sample**) and hit **Generate**. You'll get back a title, description with chapter markers, and a thumbnail in 20–40s. Hit `/history` to see everything you've generated, pulled straight from Neon Postgres with fresh presigned thumbnail URLs.
+Open <http://localhost:3000>. You'll be redirected to `/auth/sign-in` — sign up with any email + password (or any OAuth provider you've enabled in the Neon Console under **Auth → Configuration**). Once signed in, paste a transcript (or click **Use sample**) and hit **Generate**. You'll get back a title, description with chapter markers, and a thumbnail in 20–40s. Hit `/history` to see only the videos _you_ generated, pulled straight from Neon Postgres with fresh presigned thumbnail URLs. Use the avatar in the top-right (the `UserButton`) to manage your account or sign out.
 
 > The Next.js proxy defaults to `http://localhost:8787`. Point it at a deployed function by setting `NEON_FUNCTION_URL` in `.env.local`:
 >
@@ -151,16 +166,26 @@ From the Vercel dashboard click **Add New → Project** and pick this repo. Verc
 
 Under **Project Settings → Environment Variables**, add these (all for Production, Preview, and Development):
 
-| Variable                | Where to find it                                          | What it's for                                                  |
-| ----------------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
-| `DATABASE_URL`          | `.env.local` (pooled URL written by `neon deploy`)        | Server Component reads on `/history` and the delete action     |
-| `AWS_ACCESS_KEY_ID`     | `.env.local`                                              | Signing thumbnail URLs and deleting objects                    |
-| `AWS_SECRET_ACCESS_KEY` | `.env.local`                                              | Same                                                           |
-| `AWS_ENDPOINT_URL_S3`   | `.env.local` (your Neon Object Storage endpoint)          | Same                                                           |
-| `AWS_REGION`            | `.env.local` (e.g. `us-east-2`)                           | Same                                                           |
-| `NEON_FUNCTION_URL`     | From `neon functions get generate` above                  | The proxy at `/api/generate` forwards POSTs here               |
+| Variable                  | Where to find it                                          | What it's for                                                  |
+| ------------------------- | --------------------------------------------------------- | -------------------------------------------------------------- |
+| `DATABASE_URL`            | `.env.local` (pooled URL written by `neon deploy`)        | Server Component reads on `/history` and the delete action     |
+| `AWS_ACCESS_KEY_ID`       | `.env.local`                                              | Signing thumbnail URLs and deleting objects                    |
+| `AWS_SECRET_ACCESS_KEY`   | `.env.local`                                              | Same                                                           |
+| `AWS_ENDPOINT_URL_S3`     | `.env.local` (your Neon Object Storage endpoint)          | Same                                                           |
+| `AWS_REGION`              | `.env.local` (e.g. `us-east-2`)                           | Same                                                           |
+| `NEON_FUNCTION_URL`       | From `neon functions get generate` above                  | The proxy at `/api/generate` forwards POSTs here               |
+| `NEON_AUTH_BASE_URL`      | `.env.local` (written by `neon deploy`)                   | Neon Auth handler & session lookup                             |
+| `NEON_AUTH_COOKIE_SECRET` | Generate with `openssl rand -base64 32`                   | Signs the Neon Auth session cookie (per-deployment secret)     |
 
 You do **not** need to set `OPENAI_API_KEY`, `NEON_AI_GATEWAY_*`, or `DATABASE_URL_UNPOOLED` on Vercel — the AI Gateway tokens are used only by the Function (which Neon injects automatically), and the Next.js side doesn't need the unpooled connection.
+
+After your first deploy, add your Vercel URL (e.g. `https://your-app.vercel.app`) to the **trusted domains** in the Neon Console under **Auth → Configuration**, or with the CLI:
+
+```bash
+neon neon-auth domain add https://your-app.vercel.app
+```
+
+Without this, sign-in will fail with `invalid domain` on the redirect callback.
 
 ### 5. Bump the route-handler timeout if needed
 

@@ -52,9 +52,9 @@ export default {
       return json({ error: 'POST a transcript to this endpoint' }, 405);
     }
 
-    let body: { transcript?: string };
+    let body: { transcript?: string; userId?: string };
     try {
-      body = (await request.json()) as { transcript?: string };
+      body = (await request.json()) as { transcript?: string; userId?: string };
     } catch {
       return json({ error: 'Invalid JSON body' }, 400);
     }
@@ -62,6 +62,15 @@ export default {
     const transcript = (body.transcript ?? '').trim();
     if (transcript.length < 20) {
       return json({ error: 'Transcript is too short' }, 400);
+    }
+
+    // The Next.js `/api/generate` proxy populates `userId` from the signed-in
+    // Neon Auth session. This Function only trusts requests from that proxy.
+    // If you expose this Function to the browser directly, verify a Neon Auth
+    // JWT here instead of trusting a body field.
+    const userId = (body.userId ?? '').trim();
+    if (!userId) {
+      return json({ error: 'Missing userId' }, 401);
     }
 
     try {
@@ -80,6 +89,7 @@ export default {
       const [row] = await db
         .insert(videos)
         .values({
+          userId,
           transcript,
           title: meta.title,
           description: meta.description,

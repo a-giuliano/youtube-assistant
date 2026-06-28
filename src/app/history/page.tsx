@@ -1,14 +1,19 @@
 import Link from 'next/link';
-import { desc } from 'drizzle-orm';
+import { redirect } from 'next/navigation';
+import { desc, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { videos } from '@/db/schema';
 import { signThumbnailUrl } from '@/lib/storage';
+import { auth } from '@/lib/auth/server';
 import { ClickableThumbnail } from '../_components/clickable-thumbnail';
 import { DeleteVideoButton } from '../_components/delete-video-button';
 
 export const dynamic = 'force-dynamic';
 
 export default async function HistoryPage() {
+  const { data: session } = await auth.getSession();
+  if (!session?.user) redirect('/auth/sign-in');
+
   const rows = await db
     .select({
       id: videos.id,
@@ -18,6 +23,7 @@ export default async function HistoryPage() {
       createdAt: videos.createdAt,
     })
     .from(videos)
+    .where(eq(videos.userId, session.user.id))
     .orderBy(desc(videos.createdAt))
     .limit(50);
 
